@@ -1,0 +1,67 @@
+# Data Analysis Agent - TODO
+
+> 내가 직접 해야 하는 작업 목록
+> 마지막 업데이트: 2026-05-07
+
+---
+
+## 환경 설정 (최우선)
+
+- [ ] `.env` 파일 생성 (API 키, DB URL, S3 버킷명 실제 값 입력)
+- [ ] 사내 SDK 패키지 설치 (pip install <사내패키지명>)
+- [ ] AWS 자격증명 설정 (~/.aws/credentials 또는 환경변수)
+- [ ] LLM API 키 발급 (OpenAI 또는 사내 LLM 서버 URL 확인)
+
+---
+
+## 사내 SDK 연동
+
+- [ ] `wrappers/sdk_wrapper.py`에 실제 SDK import 및 연결 코드 작성
+- [ ] 실제 DB 테이블명/스키마 확인 → `pipeline/data_query.py`의 SQL 수정
+- [ ] SDK 쿼리 결과 → DataFrame 변환 방식 확인 (to_dataframe? to_pandas?)
+- [ ] 연결 테스트: `sdk_wrapper.test_connection()` 통과 확인
+
+---
+
+## S3 연동
+
+- [ ] S3 버킷명 및 parquet 파일 경로 패턴 확인 (e.g., `data/{product}/YYYY/MM/`)
+- [ ] `wrappers/s3_wrapper.py`에 실제 read 로직 작성
+- [ ] IAM 권한 확인 (s3:GetObject, s3:ListBucket)
+- [ ] 대용량 파일 처리 방식 결정 (전체 로드 vs pyarrow dataset)
+
+---
+
+## 데이터 스키마
+
+- [ ] 실제 DB 컬럼명 목록 정리 → SQL 쿼리에 반영
+- [ ] S3 parquet 컬럼명 확인 → 머지 키(join key) 결정
+- [ ] target 변수 확정 (피처 분석에서 종속변수로 사용할 컬럼)
+- [ ] 범주형/수치형 컬럼 구분 정리
+
+---
+
+## LLM 설정
+
+- [ ] 사용할 모델 결정 (gpt-4o / 사내 모델 / claude)
+- [ ] API base URL 확인 (사내 프록시 있으면 해당 URL)
+- [ ] rate limit 확인 → `llm/client.py` 재시도 간격 조정
+- [ ] 프롬프트 테스트: 실제 입력 10개로 파싱 정확도 확인
+
+---
+
+## 배포/운영
+
+- [ ] git init + 초기 커밋
+- [ ] 팀 내 공유용 README.md 작성
+- [ ] Streamlit 서버 배포 방식 결정 (로컬 / EC2 / Streamlit Cloud)
+- [ ] 접근 권한 설정 (사내망 제한 등)
+
+---
+
+## 선택 사항 (나중에)
+
+- [ ] 예측 모델을 실제 ML 모델로 교체 (현재: 정규화 평균 스코어링)
+- [ ] 체크포인트 재개 UI 구현 (사이드바에서 이전 분석 불러오기)
+- [ ] 분석 결과 ��보내기 (CSV 다운로드, 리포트 PDF)
+- [ ] 멀티 사용자 지원 (session 격리)

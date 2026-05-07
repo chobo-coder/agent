@@ -2,6 +2,7 @@
 
 import pandas as pd
 
+import schema
 from pipeline import BaseHandler
 from core.session import SessionManager
 from core.orchestrator import StepResult
@@ -19,7 +20,8 @@ class DataLoaderHandler(BaseHandler):
         product = session.get_metadata("current_product")
         existing_df = session.get_dataframe("query_result")
 
-        s3_df = self._s3.read_parquet(prefix=f"data/{product}/")
+        prefix = schema.S3_PATH_PATTERN.format(product=product)
+        s3_df = self._s3.read_parquet(prefix=prefix)
         merged_df = self._merge(existing_df, s3_df)
 
         return StepResult(
@@ -31,7 +33,18 @@ class DataLoaderHandler(BaseHandler):
     def _merge(
         self, existing: pd.DataFrame | None, new: pd.DataFrame
     ) -> pd.DataFrame:
-        """Merge existing query result with S3 data."""
+        """Merge using keys defined in schema."""
         if existing is None:
             return new
+
+        merge_keys = [
+            k for k in schema.S3_MERGE_KEYS
+            if k in existing.columns and k in new.columns
+        ]
+
+        if merge_keys:
+            return existing.merge(
+                new, on=merge_keys, how="left", suffixes=("", "_s3")
+            ).drop_duplicates().reset_index(drop=True)
+
         return pd.concat([existing, new], ignore_index=True).drop_duplicates()

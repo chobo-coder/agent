@@ -1,5 +1,6 @@
 """SQL query execution via internal SDK."""
 
+import schema
 from pipeline import BaseHandler
 from core.session import SessionManager
 from core.orchestrator import StepResult
@@ -25,10 +26,12 @@ class DataQueryHandler(BaseHandler):
         )
 
     def _build_query(self, product: str) -> str:
-        """Build SQL query for the given product."""
+        """Build SQL query from schema config."""
+        columns = ", ".join(schema.DB_COLUMNS)
         return f"""
-        SELECT *
-        FROM analytics.product_data
-        WHERE product_name = '{product}'
-        ORDER BY created_at DESC
+        SELECT {columns}
+        FROM {schema.DB_TABLE}
+        WHERE {schema.DB_PRODUCT_COLUMN} = '{product}'
+          AND {schema.DB_DATE_COLUMN} >= CURRENT_DATE - INTERVAL '{schema.DB_LOOKBACK_DAYS} days'
+        ORDER BY {schema.DB_DATE_COLUMN} DESC
         """
