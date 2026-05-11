@@ -109,9 +109,14 @@ def handle_user_input(session: SessionManager, user_input: str) -> str:
         session.save_snapshot()
         load = _parse_yes_no(user_input)
         if load:
-            sm.transition_to(WorkflowState.AWAITING_LOAD_DECISION)
-            sm.transition_to(WorkflowState.LOADING_PARQUET)
-            sm.transition_to(WorkflowState.SHOWING_DATA_OVERVIEW)
+            with st.status("S3에서 데이터를 로딩하고 있습니다...", expanded=True) as status:
+                status.update(label="S3 parquet 파일 탐색 중...")
+                sm.transition_to(WorkflowState.AWAITING_LOAD_DECISION)
+                status.update(label="parquet 파일 읽는 중...")
+                sm.transition_to(WorkflowState.LOADING_PARQUET)
+                status.update(label="기존 데이터와 머지 중...")
+                sm.transition_to(WorkflowState.SHOWING_DATA_OVERVIEW)
+                status.update(label="S3 로딩 완료", state="complete")
             session.save_snapshot()  # 데이터 오버뷰 시점 스냅샷
             return (
                 "S3에서 추가 데이터를 로딩하고 머지했습니다.\n"
@@ -189,18 +194,23 @@ def handle_user_input(session: SessionManager, user_input: str) -> str:
         df = session.get_dataframe("preprocessed")
         if df is None:
             df = session.get_dataframe("query_result")
-        metrics = compute_prediction_metrics(df, schema.TARGET_COLUMN, selections)
-        session.set_metadata("prediction_metrics", metrics)
 
-        # scatter plot 생성 및 세션 저장
-        plot_png = plot_feature_scatter(df, schema.TARGET_COLUMN, selections)
-        session.set_metadata("prediction_plot", plot_png)
+        with st.status("예측을 실행하고 있습니다...", expanded=True) as status:
+            status.update(label="선택된 조건으로 지표 계산 중...")
+            metrics = compute_prediction_metrics(df, schema.TARGET_COLUMN, selections)
+            session.set_metadata("prediction_metrics", metrics)
+            st.write(f"Screened: {metrics['screened']}건 / F1: {metrics['f1_score']}")
 
-        sm.transition_to(WorkflowState.AWAITING_COMBINATIONS)
-        sm.transition_to(WorkflowState.PREDICTING)
-        sm.transition_to(WorkflowState.SHOWING_PREDICTIONS)
-        session.save_snapshot()  # 예측 결과 시점 스냅샷
-        sm.transition_to(WorkflowState.COMPLETED)
+            status.update(label="Scatter Plot 생성 중...")
+            plot_png = plot_feature_scatter(df, schema.TARGET_COLUMN, selections)
+            session.set_metadata("prediction_plot", plot_png)
+
+            sm.transition_to(WorkflowState.AWAITING_COMBINATIONS)
+            sm.transition_to(WorkflowState.PREDICTING)
+            sm.transition_to(WorkflowState.SHOWING_PREDICTIONS)
+            session.save_snapshot()  # 예측 결과 시점 스냅샷
+            sm.transition_to(WorkflowState.COMPLETED)
+            status.update(label="예측 완료", state="complete")
 
         # 조건 요약
         cond_lines = []
@@ -236,27 +246,35 @@ def handle_user_input(session: SessionManager, user_input: str) -> str:
 
         # 자동으로 wafer map 분석 진행
         params = session.get_metadata("query_params", {})
-        map_df = map_pipeline.query_wafer_map_detail(params, selected)
-        session.set_dataframe("map_die_detail", map_df)
 
-        pattern = map_pipeline.classify_pattern(map_df)
-        session.set_metadata("map_pattern", pattern)
+        with st.status("Wafer Map을 분석하고 있습니다...", expanded=True) as status:
+            status.update(label="Wafer Map 데이터 조회 중...")
+            map_df = map_pipeline.query_wafer_map_detail(params, selected)
+            session.set_dataframe("map_die_detail", map_df)
 
-        agg_df = map_pipeline.build_aggregate_fail_map(map_df)
-        session.set_dataframe("map_aggregate", agg_df)
+            status.update(label="패턴 분석 중 (edge/center/random)...")
+            pattern = map_pipeline.classify_pattern(map_df)
+            session.set_metadata("map_pattern", pattern)
 
-        # wafer별 plot + aggregate plot 생성
-        lot_cd = params.get("lot_cd", "")
-        layout = schema.MAP_LAYOUT_BY_LOT_CD.get(lot_cd, schema.MAP_DEFAULT_LAYOUT)
+            status.update(label="Aggregate Map 생성 중...")
+            agg_df = map_pipeline.build_aggregate_fail_map(map_df)
+            session.set_dataframe("map_aggregate", agg_df)
 
-        plots = []
-        for w in selected:
-            png = map_pipeline.plot_wafer_map(map_df, w["wafer_id"], w["run_id"], layout)
-            plots.append({"run_id": w["run_id"], "wafer_id": w["wafer_id"], "png": png})
+            # wafer별 plot + aggregate plot 생성
+            lot_cd = params.get("lot_cd", "")
+            layout = schema.MAP_LAYOUT_BY_LOT_CD.get(lot_cd, schema.MAP_DEFAULT_LAYOUT)
 
-        agg_png = map_pipeline.plot_aggregate_map(agg_df)
-        plots.append({"run_id": "aggregate", "wafer_id": "all", "png": agg_png})
-        session.set_metadata("map_plots", plots)
+            plots = []
+            for w in selected:
+                status.update(label=f"Wafer Map 렌더링 중... ({w['wafer_id']})")
+                png = map_pipeline.plot_wafer_map(map_df, w["wafer_id"], w["run_id"], layout)
+                plots.append({"run_id": w["run_id"], "wafer_id": w["wafer_id"], "png": png})
+
+            status.update(label="Aggregate Map 렌더링 중...")
+            agg_png = map_pipeline.plot_aggregate_map(agg_df)
+            plots.append({"run_id": "aggregate", "wafer_id": "all", "png": agg_png})
+            session.set_metadata("map_plots", plots)
+            status.update(label="MAP 분석 완료", state="complete")
 
         sm.transition_to(WorkflowState.MAP_ANALYZING_WAFER_MAP)
         sm.transition_to(WorkflowState.MAP_SHOWING_RESULTS)
@@ -432,7 +450,10 @@ def _handle_collecting(session: SessionManager, user_input: str) -> str:
     params = session.get_metadata("query_params", {})
 
     # LLM으로 파라미터 추출
-    parsed = _extract_params_with_llm(user_input, params)
+    with st.status("조건을 분석하고 있습니다...", expanded=False) as status:
+        status.update(label="입력에서 파라미터 추출 중...")
+        parsed = _extract_params_with_llm(user_input, params)
+        status.update(label="조건 분석 완료", state="complete")
     # null 값은 무시하고 기존 값 유지
     for k, v in parsed.items():
         if v is not None:
@@ -486,12 +507,12 @@ def _handle_collecting(session: SessionManager, user_input: str) -> str:
         return _handle_yield_loading(session, params)
 
     # conventional: 기존 로직
-    sm.transition_to(WorkflowState.QUERYING_DATA)
-    sm.transition_to(WorkflowState.SHOWING_QUERY_RESULTS)
-
-    # COLLECTING_PARAMS 스냅샷 (쿼리 전 시점)
-    # SHOWING_QUERY_RESULTS 도달 직후이므로 여기서 두 단계 스냅샷 저장
-    # (COLLECTING_PARAMS는 이미 핸들러 진입 시 저장됨)
+    with st.status("데이터를 조회하고 있습니다...", expanded=True) as status:
+        status.update(label="SQL 쿼리 생성 중...")
+        sm.transition_to(WorkflowState.QUERYING_DATA)
+        status.update(label="DB에서 데이터 조회 중...")
+        sm.transition_to(WorkflowState.SHOWING_QUERY_RESULTS)
+        status.update(label="데이터 조회 완료", state="complete")
 
     overview = _build_data_overview(params)
     conditions = _format_conditions(params)
@@ -703,34 +724,40 @@ def _apply_preprocess_plan(session: SessionManager) -> str:
     plan: PreprocessPlan = session.get_metadata("preprocess_plan")
     df = _get_active_dataframe(session)
 
-    if plan and plan.actions and df is not None:
-        result_df = apply_plan(df, plan)
-        session.set_dataframe("preprocessed", result_df)
+    with st.status("전처리를 적용하고 있습니다...", expanded=True) as status:
+        if plan and plan.actions and df is not None:
+            for i, a in enumerate(plan.actions):
+                status.update(label=f"[{i+1}/{len(plan.actions)}] {a.tool_name} 적용 중...")
+            result_df = apply_plan(df, plan)
+            session.set_dataframe("preprocessed", result_df)
 
-        # 핸들러/파라미터 정보 저장 (호환용)
-        items = []
-        merged_params = {}
-        tool_names = []
-        for a in plan.actions:
-            items.append(a.handler)
-            merged_params.update(a.params)
-            tool_names.append(a.tool_name)
-        session.set_metadata("preprocess_items", items)
-        session.set_metadata("preprocess_params", merged_params)
-    else:
-        result_df = df
-        tool_names = []
+            # 핸들러/파라미터 정보 저장 (호환용)
+            items = []
+            merged_params = {}
+            tool_names = []
+            for a in plan.actions:
+                items.append(a.handler)
+                merged_params.update(a.params)
+                tool_names.append(a.tool_name)
+            session.set_metadata("preprocess_items", items)
+            session.set_metadata("preprocess_params", merged_params)
+        else:
+            result_df = df
+            tool_names = []
 
-    # 계획 정리
-    session.set_metadata("preprocess_plan", None)
+        # 계획 정리
+        session.set_metadata("preprocess_plan", None)
 
-    # scanning 자동 실행
-    scanning_df = run_threshold_scanning(
-        result_df if result_df is not None else df,
-        schema.AVAILABLE_FEATURES,
-        schema.TARGET_COLUMN,
-    )
-    session.set_dataframe("scanning_result", scanning_df)
+        # scanning 자동 실행
+        status.update(label="Threshold Scanning 실행 중...")
+        scanning_df = run_threshold_scanning(
+            result_df if result_df is not None else df,
+            schema.AVAILABLE_FEATURES,
+            schema.TARGET_COLUMN,
+        )
+        session.set_dataframe("scanning_result", scanning_df)
+        st.write(f"전처리 완료: {result_df.shape[0]:,}행 × {result_df.shape[1]}열" if result_df is not None else "")
+        status.update(label="전처리 + Scanning 완료", state="complete")
 
     # 상태 전이
     sm.transition_to(WorkflowState.AWAITING_PREPROCESS)
@@ -762,7 +789,11 @@ def _apply_preprocess_plan(session: SessionManager) -> str:
 def _handle_eda(session: SessionManager) -> None:
     """EDA 실행 후 결과를 채팅에 추가"""
     df = session.get_dataframe("query_result")
-    result = run_eda(df)
+
+    with st.status("EDA 분석 중...", expanded=True) as status:
+        status.update(label="결측치 분석 중...")
+        result = run_eda(df)
+        status.update(label="EDA 분석 완료", state="complete")
 
     # EDA 결과 DataFrame을 세션에 저장
     session.set_dataframe("eda_missing", result.missing)
@@ -780,13 +811,18 @@ def _handle_eda(session: SessionManager) -> None:
 def _handle_map_query(session: SessionManager, params: dict) -> str:
     """MAP 워크플로우: 파라미터 수집 완료 → LOT 조회 + fail 집계"""
     sm = session.state_machine
-    sm.transition_to(WorkflowState.MAP_QUERYING_LOT)
 
-    summary_df = map_pipeline.query_lot_fail_summary(params)
-    session.set_dataframe("map_fail_summary", summary_df)
+    with st.status("MAP 데이터를 조회하고 있습니다...", expanded=True) as status:
+        status.update(label="LOT fail 집계 조회 중...")
+        sm.transition_to(WorkflowState.MAP_QUERYING_LOT)
+        summary_df = map_pipeline.query_lot_fail_summary(params)
+        session.set_dataframe("map_fail_summary", summary_df)
+        st.write(f"조회 완료: {len(summary_df)}건 (run × wafer)")
 
-    candidates = map_pipeline.get_concentration_candidates(summary_df)
-    session.set_metadata("map_concentration_candidates", candidates)
+        status.update(label="Fail 몰림 분석 중...")
+        candidates = map_pipeline.get_concentration_candidates(summary_df)
+        session.set_metadata("map_concentration_candidates", candidates)
+        status.update(label="MAP 조회 완료", state="complete")
 
     sm.transition_to(WorkflowState.MAP_SHOWING_FAIL_CONCENTRATION)
     session.save_snapshot()
@@ -817,17 +853,21 @@ def _handle_map_prev_process_decision(session: SessionManager, user_input: str) 
     sm.transition_to(WorkflowState.MAP_AWAITING_PREV_PROCESS_MERGE)
     sm.transition_to(WorkflowState.MAP_ANALYZING_PREV_PROCESS)
 
-    # merge + similarity 계산
-    map_df = session.get_dataframe("map_die_detail")
-    merged_df = map_pipeline.merge_prev_process_data(map_df, selected_options)
-    session.set_dataframe("map_prev_merged", merged_df)
+    with st.status("전공정 데이터를 분석하고 있습니다...", expanded=True) as status:
+        # merge + similarity 계산
+        status.update(label="전공정 데이터 조회 + Merge 중...")
+        map_df = session.get_dataframe("map_die_detail")
+        merged_df = map_pipeline.merge_prev_process_data(map_df, selected_options)
+        session.set_dataframe("map_prev_merged", merged_df)
 
-    feature_cols = []
-    for opt in selected_options:
-        feature_cols.extend(opt["columns"])
+        feature_cols = []
+        for opt in selected_options:
+            feature_cols.extend(opt["columns"])
 
-    similarity_df = map_pipeline.compute_feature_similarity(merged_df, feature_cols)
-    session.set_dataframe("map_similarity", similarity_df)
+        status.update(label="Feature Similarity 계산 중...")
+        similarity_df = map_pipeline.compute_feature_similarity(merged_df, feature_cols)
+        session.set_dataframe("map_similarity", similarity_df)
+        status.update(label="전공정 분석 완료", state="complete")
 
     sm.transition_to(WorkflowState.MAP_SHOWING_PREV_PROCESS_RESULTS)
     session.save_snapshot()
@@ -843,22 +883,35 @@ def _handle_yield_loading(session: SessionManager, params: dict) -> str:
     """수율 워크플로우: 파라미터 수집 완료 → parquet 로드 or DB 조회 → 전처리 → overview"""
     sm = session.state_machine
 
-    # 1. week 결정 + 데이터 로드
-    sm.transition_to(WorkflowState.YIELD_LOADING_DATA)
-    weeks = yield_pipeline.resolve_weeks(params)
-    raw_df = yield_pipeline.load_or_query(params, weeks)
-    session.set_dataframe("yield_raw", raw_df)
+    with st.status("수율 데이터를 조회하고 있습니다...", expanded=True) as status:
+        # 1. week 결정 + 데이터 로드
+        sm.transition_to(WorkflowState.YIELD_LOADING_DATA)
+        weeks = yield_pipeline.resolve_weeks(params)
+        status.update(label=f"조회 대상: {', '.join(weeks)}")
 
-    # 2. 날짜 필터링 (from_date/end_date 지정 시)
-    sm.transition_to(WorkflowState.YIELD_PREPROCESSING)
-    filtered_df = yield_pipeline.filter_by_date(
-        raw_df, params.get("from_date"), params.get("end_date")
-    )
+        for i, week in enumerate(weeks):
+            parquet_path = yield_pipeline.get_parquet_path(params["lot_cd"], week)
+            if parquet_path.exists():
+                status.update(label=f"[{i+1}/{len(weeks)}] {week} — 캐시 로드 중...")
+            else:
+                status.update(label=f"[{i+1}/{len(weeks)}] {week} — DB 조회 + 저장 중...")
 
-    # 3. 전처리 (수율/불량률 계산)
-    summary = yield_pipeline.preprocess_yield(filtered_df)
-    session.set_dataframe("yield_oper_summary", summary["oper_summary"])
-    session.set_dataframe("yield_cat_detail", summary["cat_detail"])
+        raw_df = yield_pipeline.load_or_query(params, weeks)
+        session.set_dataframe("yield_raw", raw_df)
+        st.write(f"로드 완료: {len(raw_df):,}행")
+
+        # 2. 날짜 필터링 (from_date/end_date 지정 시)
+        sm.transition_to(WorkflowState.YIELD_PREPROCESSING)
+        status.update(label="수율/불량률 계산 중...")
+        filtered_df = yield_pipeline.filter_by_date(
+            raw_df, params.get("from_date"), params.get("end_date")
+        )
+
+        # 3. 전처리 (수율/불량률 계산)
+        summary = yield_pipeline.preprocess_yield(filtered_df)
+        session.set_dataframe("yield_oper_summary", summary["oper_summary"])
+        session.set_dataframe("yield_cat_detail", summary["cat_detail"])
+        status.update(label="수율 데이터 준비 완료", state="complete")
 
     # 4. overview 표시
     sm.transition_to(WorkflowState.YIELD_SHOWING_OVERVIEW)
