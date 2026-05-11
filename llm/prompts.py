@@ -14,9 +14,15 @@ class PromptBuilder:
 
     def build_param_extraction(self, user_input: str, existing_params: dict) -> str:
         """사용자 입력에서 분석 조건 파라미터를 추출하는 프롬프트"""
-        cat_info = ""
-        if schema.CAT_OPTIONS:
-            cat_info = f"\n사용 가능한 카테고리 목록: {schema.CAT_OPTIONS}"
+        lot_info = ""
+        if schema.LOT_OPTIONS:
+            lot_info = f"\n사용 가능한 LOT 코드 예시: {schema.LOT_OPTIONS}"
+
+        oper_info = ""
+        if schema.OPER_OPTIONS:
+            oper_info = f"\n사용 가능한 공정 목록: {schema.OPER_OPTIONS}"
+
+        cat_info = ""  # cat은 자유 입력 (cat1, cat2 등)
 
         existing_info = ""
         if existing_params:
@@ -25,37 +31,96 @@ class PromptBuilder:
         return f"""사용자의 분석 요청에서 다음 파라미터를 추출하세요.
 
 ## 추출할 파라미터
-- lot_cd: LOT 코드 (영문+숫자 조합, 예: A2401, LOT-2025-001) [필수]
-- from_date: 조회 시작일 (YYYY-MM-DD 형식) [필수]
-- end_date: 조회 종료일 (YYYY-MM-DD 형식) [필수]
-- cat: 분석 카테고리 (문자열) [선택 — 없으면 null]{cat_info}
+- lot_cd: LOT 코드 (영문+숫자 조합, 3글자) [필수]{lot_info}
+- oper: 공정(OPER) 코드 [필수]{oper_info}
+- from_date: 조회 시작일 (YYYYMMDD 형식, 하이픈 없이 8자리) [필수]
+- end_date: 조회 종료일 (YYYYMMDD 형식, 하이픈 없이 8자리) [필수]
+- cat: 분석 카테고리 (예: "cat1", "cat2") [선택 — 없으면 null]{cat_info}
 {existing_info}
 
 ## 규칙
 - 입력에서 해당 정보를 찾을 수 없으면 null로 표시
-- 날짜는 반드시 YYYY-MM-DD 형식으로 변환
-- "1월부터 3월까지" → 해당 연도의 01-01 ~ 03-31로 변환
+- 날짜는 반드시 YYYYMMDD 형식으로 변환 (하이픈/슬래시/점 없이 8자리 숫자)
+  - "2025-01-01" → "20250101"
+  - "2025/03/31" → "20250331"
+  - "2025.06.30" → "20250630"
+- "1월부터 3월까지" → 해당 연도의 20250101 ~ 20250331로 변환
 - "최근 3개월" → 오늘 기준 3개월 전 ~ 오늘로 계산
 - "지난달" → 지난달 1일 ~ 지난달 말일
 - LOT 코드는 원문 그대로 유지 (대문자로 변환)
 - 카테고리가 목록에 없어도 사용자가 명시했으면 그대로 추출
 
 ## 예시
-- "LOT A2401 2025-01-01부터 3월말까지 CAT_B로 분석해줘"
-  → {{"lot_cd": "A2401", "from_date": "2025-01-01", "end_date": "2025-03-31", "cat": "CAT_B"}}
+- "LOT *** *** 2025-01-01부터 3월말까지 cat2로 분석해줘"
+  → {{"lot_cd": "***", "oper": "***", "from_date": "20250101", "end_date": "20250331", "cat": "cat2"}}
 
-- "A2502 지난 분기 CAT_A"
-  → {{"lot_cd": "A2502", "from_date": "2025-01-01", "end_date": "2025-03-31", "cat": "CAT_A"}}
+- "*** *** 지난 분기 cat1"
+  → {{"lot_cd": "***", "oper": "***", "from_date": "20250101", "end_date": "20250331", "cat": "cat1"}}
 
-- "기간은 2025년 상반기"
-  → {{"lot_cd": null, "from_date": "2025-01-01", "end_date": "2025-06-30", "cat": null}}
+- "기간은 2025년 상반기 ***"
+  → {{"lot_cd": null, "oper": "***", "from_date": "20250101", "end_date": "20250630", "cat": null}}
 
-- "CAT_C로 해줘"
-  → {{"lot_cd": null, "from_date": null, "end_date": null, "cat": "CAT_C"}}
+- "*** 20250401 20250630"
+  → {{"lot_cd": "***", "oper": null, "from_date": "20250401", "end_date": "20250630", "cat": null}}
+
+- "cat3으로 해줘"
+  → {{"lot_cd": null, "oper": null, "from_date": null, "end_date": null, "cat": "cat3"}}
 
 ## 응답 형식
 반드시 아래 JSON만 출력:
-{{"lot_cd": "...", "from_date": "...", "end_date": "...", "cat": "..."}}
+{{"lot_cd": "...", "oper": "...", "from_date": "YYYYMMDD", "end_date": "YYYYMMDD", "cat": "..."}}
+
+## 사용자 입력
+{user_input}"""
+
+    def build_yield_param_extraction(self, user_input: str, existing_params: dict) -> str:
+        """수율 경향성 워크플로우용 파라미터 추출 프롬프트"""
+        lot_info = ""
+        if schema.LOT_OPTIONS:
+            lot_info = f"\n사용 가능한 LOT 코드 예시: {schema.LOT_OPTIONS}"
+
+        oper_info = ""
+        if schema.OPER_OPTIONS:
+            oper_info = f"\n사용 가능한 공정 목록: {schema.OPER_OPTIONS}"
+
+        existing_info = ""
+        if existing_params:
+            existing_info = f"\n\n이전에 수집된 값 (이미 있는 값은 유지, 새 값이 있으면 덮어쓰기):\n{existing_params}"
+
+        return f"""사용자의 수율 경향성 분석 요청에서 다음 파라미터를 추출하세요.
+
+## 추출할 파라미터
+- lot_cd: LOT 코드 (영문+숫자 조합) [필수]{lot_info}
+- week: 조회 주차 (YYYY-WNN 형식, 예: "2025-W20") [선택 — 없으면 null]
+- oper: 공정(OPER) 코드 [선택 — 없으면 전체 공정 조회]{oper_info}
+- from_date: 시작일 (YYYYMMDD 형식) [선택 — 특정 날짜 범위 지정 시]
+- end_date: 종료일 (YYYYMMDD 형식) [선택 — 특정 날짜 범위 지정 시]
+{existing_info}
+
+## 규칙
+- lot_cd만 필수, 나머지는 선택
+- week를 명시하지 않고 날짜도 없으면 week는 null (기본값으로 전주 사용)
+- "20주차", "W20" → "2025-W20" 형식으로 변환 (올해 기준)
+- "지난주", "전주" → null (코드에서 전주로 자동 처리)
+- 날짜는 YYYYMMDD 형식 (하이픈 없이 8자리)
+- LOT 코드는 원문 그대로 유지 (대문자로 변환)
+
+## 예시
+- "LOT001 트렌드 확인해줘"
+  → {{"lot_cd": "LOT001", "week": null, "oper": null, "from_date": null, "end_date": null}}
+
+- "LOT001 20주차 트렌드"
+  → {{"lot_cd": "LOT001", "week": "2025-W20", "oper": null, "from_date": null, "end_date": null}}
+
+- "LOT001 OP1 지난주"
+  → {{"lot_cd": "LOT001", "week": null, "oper": "OP1", "from_date": null, "end_date": null}}
+
+- "LOT001 5월 1일부터 5월 10일까지"
+  → {{"lot_cd": "LOT001", "week": null, "oper": null, "from_date": "20250501", "end_date": "20250510"}}
+
+## 응답 형식
+반드시 아래 JSON만 출력:
+{{"lot_cd": "...", "week": "...", "oper": "...", "from_date": "...", "end_date": "..."}}
 
 ## 사용자 입력
 {user_input}"""
@@ -122,23 +187,28 @@ class PromptBuilder:
 
     def _build_combination_prompt(self, user_input: str) -> str:
         features_str = ", ".join(schema.AVAILABLE_FEATURES)
-        return f"""사용자가 예측에 사용할 피처 조합과 threshold를 지정합니다.
+        f0, f1 = schema.AVAILABLE_FEATURES[0], schema.AVAILABLE_FEATURES[1]
+        return f"""사용자가 예측에 사용할 피처별 조건(condition)과 임계값(threshold)을 지정합니다.
+각 피처마다 독립적인 조건/임계값을 가질 수 있습니다.
 
 ## 사용 가능한 피처
 {features_str}
 
 ## 예시
-- "{schema.AVAILABLE_FEATURES[0]}이랑 {schema.AVAILABLE_FEATURES[1]}로 0.7 기준 예측해줘"
-  → {{"features": ["{schema.AVAILABLE_FEATURES[0]}", "{schema.AVAILABLE_FEATURES[1]}"], "threshold": 0.7}}
-- "모든 피처 사용하고 임계값 0.5"
-  → {{"features": [], "threshold": 0.5}}
-- "상관계수 높은 상위 3개로 0.6"
-  → {{"features": "top_3_correlated", "threshold": 0.6}}
+- "{f0} >= 0.7 조건으로 예측해줘"
+  → {{"selections": [{{"feature": "{f0}", "threshold": 0.7, "condition": ">="}}]}}
+- "{f0} >= 0.7, {f1} <= 0.3 조건으로 예측해줘"
+  → {{"selections": [{{"feature": "{f0}", "threshold": 0.7, "condition": ">="}}, {{"feature": "{f1}", "threshold": 0.3, "condition": "<="}}]}}
+- "{f0}, {f1}로 예측해줘"
+  → {{"selections": [{{"feature": "{f0}", "threshold": null, "condition": null}}, {{"feature": "{f1}", "threshold": null, "condition": null}}]}}
+- "{f0}이랑 {f1}로 0.7 기준 예측해줘"
+  → {{"selections": [{{"feature": "{f0}", "threshold": 0.7, "condition": null}}, {{"feature": "{f1}", "threshold": 0.7, "condition": null}}]}}
 
 ## 규칙
 - 반드시 JSON만 출력
-- features: 피처명 리스트 (빈 리스트 = 전체 사용, "top_N_correlated" = 상위 N개 자동 선택)
-- threshold: 0.0~1.0 사이 float
+- selections: 피처별 조건 배열. 각 항목은 {{"feature": str, "threshold": float|null, "condition": str|null}}
+- threshold: 사용자가 **명시적으로 임계값을 지정한 경우에만** 0.0~1.0 float 값. 없으면 null.
+- condition: ">=" 또는 "<=" (명시한 경우만, 아니면 null)
 
 ## 사용자 입력
 {user_input}"""

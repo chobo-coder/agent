@@ -16,7 +16,8 @@ from typing import Optional
 
 class WorkflowType(Enum):
     CONVENTIONAL = "conventional"   # 기존 분석
-    MAP_TREND = "map_trend"         # TODO: MAP 경향성 분석
+    MAP_TREND = "map_trend"         # MAP 경향성 분석
+    YIELD_TREND = "yield_trend"     # 수율 경향성 분석
     EQUIP_TREND = "equip_trend"     # TODO: 장비 경향성 분석
 
 
@@ -47,12 +48,21 @@ class WorkflowState(Enum):
     SHOWING_PREDICTIONS = auto()
 
     # ── MAP 경향성 워크플로우 ──
-    # TODO: MAP 경향성 분석에 필요한 상태 추가
-    # MAP_SELECTING_PARAMS = auto()   # MAP 분석 파라미터 선택 (wafer 좌표, die 위치 등)
-    # MAP_LOADING_DATA = auto()       # MAP 데이터 로딩 (wafer map 이미지 or 좌표 데이터)
-    # MAP_ANALYZING = auto()          # MAP 경향성 분석 실행 (spatial pattern 감지)
-    # MAP_SHOWING_RESULTS = auto()    # MAP 분석 결과 표시 (heatmap, 클러스터링 결과)
-    # MAP_COMPARING = auto()          # LOT 간 MAP 비교 (선택)
+    MAP_QUERYING_LOT = auto()                # LOT 조회 + 1차 fail 집계
+    MAP_SHOWING_FAIL_CONCENTRATION = auto()  # run/wafer별 fail 몰림 표시
+    MAP_SELECTING_WAFERS = auto()            # 분석 대상 wafer 선택
+    MAP_ANALYZING_WAFER_MAP = auto()         # wafer map 상세 조회 + 분석
+    MAP_SHOWING_RESULTS = auto()             # 개별/aggregate map + 패턴 판정
+    MAP_AWAITING_PREV_PROCESS_MERGE = auto() # 전공정 merge 여부 선택
+    MAP_ANALYZING_PREV_PROCESS = auto()      # 전공정 데이터 merge + similarity
+    MAP_SHOWING_PREV_PROCESS_RESULTS = auto() # 전공정 feature ranking 표시
+
+    # ── 수율 경향성 워크플로우 ──
+    YIELD_LOADING_DATA = auto()         # parquet 확인 → 없으면 DB 조회 + 저장
+    YIELD_PREPROCESSING = auto()        # 자동: 피벗, 수율/불량률 계산
+    YIELD_SHOWING_OVERVIEW = auto()     # 공정별 수율 + cat별 불량률 표시
+    YIELD_AWAITING_REQUEST = auto()     # 사용자 요청 대기 (루프)
+    YIELD_SHOWING_DETAIL = auto()       # 요청 결과 표시
 
     # ── 장비 경향성 워크플로우 ──
     # TODO: 장비 경향성 분석에 필요한 상태 추가
@@ -77,9 +87,12 @@ DECISION_STATES = {
     WorkflowState.SHOWING_QUERY_RESULTS,
     WorkflowState.SHOWING_DATA_OVERVIEW,
     WorkflowState.SHOWING_FEATURES,
-    # TODO: MAP 워크플로우 분기점 추가
-    # WorkflowState.MAP_SELECTING_PARAMS,
-    # WorkflowState.MAP_SHOWING_RESULTS,
+    WorkflowState.MAP_SHOWING_FAIL_CONCENTRATION,
+    WorkflowState.MAP_SHOWING_RESULTS,
+    WorkflowState.MAP_AWAITING_PREV_PROCESS_MERGE,
+    WorkflowState.MAP_SHOWING_PREV_PROCESS_RESULTS,
+    WorkflowState.YIELD_SHOWING_OVERVIEW,
+    WorkflowState.YIELD_AWAITING_REQUEST,
     # TODO: 장비 워크플로우 분기점 추가
     # WorkflowState.EQUIP_SELECTING_PARAMS,
     # WorkflowState.EQUIP_SHOWING_TREND,
@@ -126,18 +139,48 @@ _CONVENTIONAL_TRANSITIONS: dict[WorkflowState, list[WorkflowState]] = {
     WorkflowState.SHOWING_PREDICTIONS: [WorkflowState.COMPLETED],
 }
 
-# TODO: MAP 경향성 전이 규칙
-# _MAP_TREND_TRANSITIONS: dict[WorkflowState, list[WorkflowState]] = {
-#     WorkflowState.SHOWING_DATA_OVERVIEW: [WorkflowState.MAP_SELECTING_PARAMS],
-#     WorkflowState.MAP_SELECTING_PARAMS: [WorkflowState.MAP_LOADING_DATA],
-#     WorkflowState.MAP_LOADING_DATA: [WorkflowState.MAP_ANALYZING],
-#     WorkflowState.MAP_ANALYZING: [WorkflowState.MAP_SHOWING_RESULTS],
-#     WorkflowState.MAP_SHOWING_RESULTS: [
-#         WorkflowState.MAP_COMPARING,   # 추가 비교
-#         WorkflowState.COMPLETED,       # 종료
-#     ],
-#     WorkflowState.MAP_COMPARING: [WorkflowState.COMPLETED],
-# }
+# MAP 경향성 전이 규칙 (파라미터 수집 완료 후 분기)
+_MAP_TREND_TRANSITIONS: dict[WorkflowState, list[WorkflowState]] = {
+    WorkflowState.COLLECTING_PARAMS: [
+        WorkflowState.VALIDATING_PARAMS,
+        WorkflowState.MAP_QUERYING_LOT,
+    ],
+    WorkflowState.VALIDATING_PARAMS: [
+        WorkflowState.COLLECTING_PARAMS,
+        WorkflowState.MAP_QUERYING_LOT,
+    ],
+    WorkflowState.MAP_QUERYING_LOT: [WorkflowState.MAP_SHOWING_FAIL_CONCENTRATION],
+    WorkflowState.MAP_SHOWING_FAIL_CONCENTRATION: [WorkflowState.MAP_SELECTING_WAFERS],
+    WorkflowState.MAP_SELECTING_WAFERS: [WorkflowState.MAP_ANALYZING_WAFER_MAP],
+    WorkflowState.MAP_ANALYZING_WAFER_MAP: [WorkflowState.MAP_SHOWING_RESULTS],
+    WorkflowState.MAP_SHOWING_RESULTS: [WorkflowState.MAP_AWAITING_PREV_PROCESS_MERGE],
+    WorkflowState.MAP_AWAITING_PREV_PROCESS_MERGE: [
+        WorkflowState.MAP_ANALYZING_PREV_PROCESS,
+        WorkflowState.COMPLETED,
+    ],
+    WorkflowState.MAP_ANALYZING_PREV_PROCESS: [WorkflowState.MAP_SHOWING_PREV_PROCESS_RESULTS],
+    WorkflowState.MAP_SHOWING_PREV_PROCESS_RESULTS: [WorkflowState.COMPLETED],
+}
+
+# 수율 경향성 전이 규칙 (파라미터 수집 완료 후 분기)
+_YIELD_TREND_TRANSITIONS: dict[WorkflowState, list[WorkflowState]] = {
+    WorkflowState.COLLECTING_PARAMS: [
+        WorkflowState.VALIDATING_PARAMS,
+        WorkflowState.YIELD_LOADING_DATA,
+    ],
+    WorkflowState.VALIDATING_PARAMS: [
+        WorkflowState.COLLECTING_PARAMS,
+        WorkflowState.YIELD_LOADING_DATA,
+    ],
+    WorkflowState.YIELD_LOADING_DATA: [WorkflowState.YIELD_PREPROCESSING],
+    WorkflowState.YIELD_PREPROCESSING: [WorkflowState.YIELD_SHOWING_OVERVIEW],
+    WorkflowState.YIELD_SHOWING_OVERVIEW: [WorkflowState.YIELD_AWAITING_REQUEST],
+    WorkflowState.YIELD_AWAITING_REQUEST: [
+        WorkflowState.YIELD_SHOWING_DETAIL,
+        WorkflowState.COMPLETED,
+    ],
+    WorkflowState.YIELD_SHOWING_DETAIL: [WorkflowState.YIELD_AWAITING_REQUEST],
+}
 
 # TODO: 장비 경향성 전이 규칙
 # _EQUIP_TREND_TRANSITIONS: dict[WorkflowState, list[WorkflowState]] = {
@@ -160,9 +203,11 @@ def _build_transitions(workflow_type: WorkflowType) -> dict[WorkflowState, list[
 
     if workflow_type == WorkflowType.CONVENTIONAL:
         transitions.update(_CONVENTIONAL_TRANSITIONS)
-    # TODO: MAP/장비 워크플로우 전이 연결
-    # elif workflow_type == WorkflowType.MAP_TREND:
-    #     transitions.update(_MAP_TREND_TRANSITIONS)
+    elif workflow_type == WorkflowType.MAP_TREND:
+        transitions.update(_MAP_TREND_TRANSITIONS)
+    elif workflow_type == WorkflowType.YIELD_TREND:
+        transitions.update(_YIELD_TREND_TRANSITIONS)
+    # TODO: 장비 워크플로우 전이 연결
     # elif workflow_type == WorkflowType.EQUIP_TREND:
     #     transitions.update(_EQUIP_TREND_TRANSITIONS)
     else:
@@ -186,6 +231,7 @@ class StateMachine:
         self._state = WorkflowState.IDLE
         self._workflow_type = workflow_type
         self._transitions = _build_transitions(workflow_type)
+        self._history: list[WorkflowState] = [WorkflowState.IDLE]
 
     @property
     def state(self) -> WorkflowState:
@@ -212,6 +258,21 @@ class StateMachine:
         allowed = self._transitions.get(self._state, [])
         return target in allowed
 
+    @property
+    def visited_states(self) -> list[WorkflowState]:
+        """방문한 상태 목록 (중복 제거, 순서 유지)"""
+        seen: set[WorkflowState] = set()
+        result: list[WorkflowState] = []
+        for s in self._history:
+            if s not in seen:
+                seen.add(s)
+                result.append(s)
+        return result
+
+    @property
+    def history(self) -> list[WorkflowState]:
+        return list(self._history)
+
     def transition_to(self, target: WorkflowState) -> None:
         if not self.can_transition_to(target):
             raise InvalidTransitionError(
@@ -219,9 +280,24 @@ class StateMachine:
                 f"(workflow: {self._workflow_type.value})"
             )
         self._state = target
+        self._history.append(target)
+
+    def jump_to(self, target: WorkflowState) -> None:
+        """롤백 전용: 전이 규칙 무시하고 이전에 방문한 상태로 강제 이동.
+        미방문 상태로는 점프 불가 → InvalidTransitionError.
+        history를 target까지 잘라냄."""
+        if target not in self._history:
+            raise InvalidTransitionError(
+                f"미방문 상태로 점프 불가: {target}"
+            )
+        # history를 target의 마지막 등장 위치까지 잘라냄
+        last_idx = len(self._history) - 1 - self._history[::-1].index(target)
+        self._history = self._history[:last_idx + 1]
+        self._state = target
 
     def reset(self) -> None:
         self._state = WorkflowState.IDLE
+        self._history = [WorkflowState.IDLE]
 
     def get_next_auto_state(self) -> Optional[WorkflowState]:
         """Get the next state for automatic (non-decision) transitions."""

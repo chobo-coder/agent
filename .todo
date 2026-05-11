@@ -1,7 +1,7 @@
 # Data Analysis Agent - TODO
 
 > 내가 직접 해야 하는 작업 목록
-> 마지막 업데이트: 2026-05-07
+> 마지막 업데이트: 2026-05-08
 
 ---
 
@@ -11,6 +11,27 @@
 - [ ] 사내 SDK 패키지 설치 (pip install <사내패키지명>)
 - [ ] AWS 자격증명 설정 (~/.aws/credentials 또는 환경변수)
 - [ ] LLM API 키 발급 (OpenAI 또는 사내 LLM 서버 URL 확인)
+
+---
+
+## schema.py 실제 값 교체 (사내에서 작업)
+
+- [ ] `LOT_OPTIONS`: *** → 실제 LOT 코드 예시로 교체
+- [ ] `OPER_OPTIONS`: *** → 실제 공정 코드로 교체 (현재 3개 placeholder)
+- [ ] `FAILBIN`: *** → 실제 oper명을 key로, fail bin 번호 리스트를 value로 교체
+- [ ] `DB_TABLE`: 실제 테이블명 입력
+- [ ] `DB_COLUMNS`: 실제 DB 컬럼명 목록으로 교체
+- [ ] `DB_DATE_COLUMN`, `DB_LOT_COLUMN`, `DB_CAT_COLUMN`: 실제 컬럼명으로 교체
+- [ ] `S3_PATH_PATTERN`, `S3_MERGE_KEYS`, `S3_COLUMNS`: 실제 S3 정보로 교체
+- [ ] `NUMERIC_COLUMNS`, `CATEGORICAL_COLUMNS`: 실제 컬럼 분류
+- [ ] `AVAILABLE_FEATURES`: 피처 분석에 사용할 실제 컬럼 목록
+
+---
+
+## 프롬프트 실제 값 교체 (사내에서 작업)
+
+- [ ] `llm/prompts.py`: LOT/OPER *** 예시를 실제 코드로 교체
+- [ ] `app.py`: 안내 메시지의 *** 예시를 실제 코드로 교체
 
 ---
 
@@ -29,15 +50,6 @@
 - [ ] `wrappers/s3_wrapper.py`에 실제 read 로직 작성
 - [ ] IAM 권한 확인 (s3:GetObject, s3:ListBucket)
 - [ ] 대용량 파일 처리 방식 결정 (전체 로드 vs pyarrow dataset)
-
----
-
-## 데이터 스키마
-
-- [ ] 실제 DB 컬럼명 목록 정리 → SQL 쿼리에 반영
-- [ ] S3 parquet 컬럼명 확인 → 머지 키(join key) 결정
-- [ ] target 변수 확정 (피처 분석에서 종속변수로 사용할 컬럼)
-- [ ] 범주형/수치형 컬럼 구분 정리
 
 ---
 
@@ -63,5 +75,7 @@
 
 - [ ] 예측 모델을 실제 ML 모델로 교체 (현재: 정규화 평균 스코어링)
 - [ ] 체크포인트 재개 UI 구현 (사이드바에서 이전 분석 불러오기)
-- [ ] 분석 결과 ��보내기 (CSV 다운로드, 리포트 PDF)
+- [ ] 분석 결과 내보내기 (CSV 다운로드, 리포트 PDF)
 - [ ] 멀티 사용자 지원 (session 격리)
+- [ ] MAP 경향성 워크플로우 구현 (TODO 스캐폴딩 완료)
+- [ ] 장비 경향성 워크플로우 구현 (TODO 스캐폴딩 완료)

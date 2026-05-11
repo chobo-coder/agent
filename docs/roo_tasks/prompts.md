@@ -303,7 +303,7 @@ test_integration.py:
 
 ## 사용 방법
 
-1. 루코드를 열고 프로젝트 루트(`/Users/hyeonjaeyeol/agent`)를 워크스페이스로 설정
+1. 루코드를 열고 프로젝트 루트(`/Users/hyeonjaeyeol/Desktop/WorkPlace/agent`)를 워크스페이스로 설정
 2. **먼저 `.roo/rules.md`를 읽게 해** (코딩 규칙, 파일 구조, 패턴이 정리되어있음)
 3. 위 프롬프트를 **순서대로** 하나씩 복사하여 루코드에 입력
 4. 각 태스크 완료 후 테스트가 통과하는지 확인한 뒤 다음으로 진행

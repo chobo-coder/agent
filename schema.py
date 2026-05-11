@@ -16,8 +16,9 @@
 # key: 내부 식별자, label: 사용자에게 보여줄 이름, type: 입력 유형
 REQUIRED_PARAMS = [
     {"key": "lot_cd", "label": "LOT 코드", "type": "text"},
-    {"key": "from_date", "label": "시작일", "type": "date", "format": "YYYY-MM-DD"},
-    {"key": "end_date", "label": "종료일", "type": "date", "format": "YYYY-MM-DD"},
+    {"key": "oper", "label": "공정(OPER)", "type": "text"},
+    {"key": "from_date", "label": "시작일", "type": "date", "format": "YYYYMMDD"},
+    {"key": "end_date", "label": "종료일", "type": "date", "format": "YYYYMMDD"},
 ]
 
 # 선택 입력 (cat 지정 시 해당 cat 유무로 Y값 결정)
@@ -25,14 +26,26 @@ OPTIONAL_PARAMS = [
     {"key": "cat", "label": "분석 카테고리 (선택)", "type": "text"},
 ]
 
-# 카테고리 목록 (선택지가 정해져 있을 경우)
-# 빈 리스트면 자유 입력, 값이 있으면 이 중에서만 선택
-CAT_OPTIONS = [
-    # TODO: 실제 카테고리명으로 교체
-    "CAT_A",
-    "CAT_B",
-    "CAT_C",
+# LOT 코드 예시 목록 (프롬프트 few-shot용)
+# 빈 리스트면 프롬프트에 예시 없이 표시
+LOT_OPTIONS = [
+    # TODO: 실제 LOT 코드 패턴/예시로 교체
+    "***",
+    "***",
+    "***",
 ]
+
+# OPER(공정) 목록
+# 빈 리스트면 자유 입력, 값이 있으면 이 중에서만 선택
+OPER_OPTIONS = [
+    # TODO: 실제 공정 코드로 교체
+    "***",
+    "***",
+    "***",
+]
+
+# 카테고리는 사용자가 자유 입력 (cat1, cat2 등 형식)
+# 별도 목록으로 관리하지 않음
 
 # =============================================================================
 # DB 테이블 정보
@@ -93,9 +106,6 @@ TARGET_COLUMN = "y"  # 자동 생성됨 (cat 또는 FAILBIN 기반)
 # =============================================================================
 # Y값 결정 로직
 # =============================================================================
-# cat 컬럼명 (DB 내)
-DB_CAT_COLUMN = "cat"
-
 # 1) cat 파라미터가 지정된 경우:
 #    → y = 1 if row[DB_CAT_COLUMN] == 지정된 cat값 else 0
 #
@@ -105,9 +115,9 @@ DB_CAT_COLUMN = "cat"
 # FAILBIN: oper(공정)를 key로, fail로 판정할 bin 번호 리스트를 value로 지정
 FAILBIN = {
     # TODO: 실제 oper명과 fail bin 번호로 교체
-    "OPER_01": [3, 5, 7],
-    "OPER_02": [2, 4],
-    "OPER_03": [1, 6, 8],
+    "***": [3, 5, 7],
+    "***": [2, 4],
+    "***": [1, 6, 8],
 }
 
 # =============================================================================
@@ -224,21 +234,132 @@ AVAILABLE_FEATURES = [
 # 기본 threshold
 DEFAULT_THRESHOLD = 0.5
 
+# Threshold scanning 설정
+SCANNING_THRESHOLDS = [round(i * 0.1, 1) for i in range(1, 10)]  # [0.1 ~ 0.9]
+SCANNING_CONDITIONS = [">=", "<="]
+
 # =============================================================================
 # MAP 경향성 분석 설정
 # =============================================================================
 
-# TODO: MAP 분석에 필요한 설정 추가
-# MAP_TABLE = "schema_name.wafer_map_table"  # wafer map 데이터 테이블
-# MAP_WAFER_ID_COLUMN = "wafer_id"           # wafer 식별 컬럼
-# MAP_X_COLUMN = "die_x"                     # die X 좌표 컬럼
-# MAP_Y_COLUMN = "die_y"                     # die Y 좌표 컬럼
-# MAP_VALUE_COLUMN = "bin_cd"                # 분석 대상 값 (bin code, 수율 등)
-# MAP_ANALYSIS_TYPES = [
-#     "spatial_clustering",    # 공간 클러스터링 (edge, center, random)
-#     "zone_analysis",         # zone별 불량률 비교
-#     "pattern_matching",      # 알려진 패턴 매칭 (scratch, ring 등)
-# ]
+# MAP 워크플로우 필수 입력 파라미터
+MAP_REQUIRED_PARAMS = [
+    {"key": "lot_cd", "label": "LOT 코드", "type": "text"},
+    {"key": "lot_no", "label": "LOT 번호", "type": "text"},
+    {"key": "oper", "label": "공정(OPER)", "type": "text"},
+    {"key": "from_date", "label": "시작일", "type": "date", "format": "YYYYMMDD"},
+    {"key": "end_date", "label": "종료일", "type": "date", "format": "YYYYMMDD"},
+]
+MAP_OPTIONAL_PARAMS = [
+    {"key": "cat", "label": "Target category", "type": "text"},
+]
+
+# MAP DB 테이블 정보
+MAP_LOT_TABLE = "schema_name.map_lot_table"  # TODO: 실제 테이블명
+MAP_FAIL_SUMMARY_TABLE = "schema_name.map_fail_summary_table"  # TODO: 실제 테이블명
+MAP_DIE_TABLE = "schema_name.map_die_table"  # TODO: 실제 테이블명
+
+# MAP 컬럼명
+MAP_LOT_CD_COLUMN = "lot_cd"  # TODO: 실제 컬럼명
+MAP_LOT_NO_COLUMN = "lot_no"
+MAP_OPER_COLUMN = "oper"
+MAP_RUN_COLUMN = "run_id"
+MAP_WAFER_COLUMN = "wafer_id"
+MAP_FAIL_COUNT_COLUMN = "count"
+MAP_TOTAL_COUNT_COLUMN = "total_count"
+MAP_X_COLUMN = "die_x"
+MAP_Y_COLUMN = "die_y"
+MAP_BIN_COLUMN = "bin_cd"
+MAP_CATEGORY_COLUMN = "category"
+MAP_FAIL_COLUMN = "fail_flag"
+MAP_VALUE_COLUMN = "map_value"
+
+# fail 몰림 기준
+MAP_FAIL_CONCENTRATION_THRESHOLD = 10
+
+# MAP 집계/조회 키
+MAP_SUMMARY_KEYS = ["lot_no", "run_id", "wafer_id"]
+MAP_DIE_QUERY_KEYS = ["lot_no", "run_id", "wafer_id"]
+MAP_MERGE_KEYS = ["lot_no", "wafer_id"]
+
+# wafer layout mask 설정
+MAP_LAYOUT_BY_LOT_CD: dict[str, list[list[int]]] = {
+    # TODO: 실제 lot_cd별 layout으로 교체
+    "lot_cd_placeholder_1": [
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 0],
+        [0, 0, 1, 0, 0],
+    ],
+}
+MAP_DEFAULT_LAYOUT = [
+    [0, 0, 1, 0, 0],
+    [0, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1],
+    [0, 1, 1, 1, 0],
+    [0, 0, 1, 0, 0],
+]
+MAP_LAYOUT_ROW_AXIS = "die_y"
+MAP_LAYOUT_COL_AXIS = "die_x"
+MAP_LAYOUT_X_OFFSET = 11  # TODO: 실제 offset으로 교체
+MAP_LAYOUT_Y_OFFSET = 11
+MAP_LAYOUT_OFFSET_MODE = "subtract"
+
+# 전공정 merge 설정
+PREV_PROCESS_MERGE_KEYS = ["run_id", "wafer_id", "die_x", "die_y"]
+PREV_PROCESS_OPTIONS = [
+    {
+        "id": "prev_process_1",
+        "label": "전공정 1",
+        "table": "schema_name.prev_process_table_1",  # TODO: 실제 테이블명
+        "columns": ["col_prev_1", "col_prev_2", "col_prev_3"],
+        "merge_keys": ["run_id", "wafer_id", "die_x", "die_y"],
+    },
+    {
+        "id": "prev_process_2",
+        "label": "전공정 2",
+        "table": "schema_name.prev_process_table_2",  # TODO: 실제 테이블명
+        "columns": ["col_prev_4", "col_prev_5", "col_prev_6"],
+        "merge_keys": ["run_id", "wafer_id", "die_x", "die_y"],
+    },
+]
+
+# 전공정 feature similarity 설정
+MAP_FEATURE_SIMILARITY_NORMALIZATION = "zscore"
+MAP_FEATURE_SIMILARITY_TOP_N = 10
+
+# =============================================================================
+# 수율 경향성 분석 설정
+# =============================================================================
+
+# 수율 워크플로우 필수 입력 파라미터
+YIELD_REQUIRED_PARAMS = [
+    {"key": "lot_cd", "label": "LOT 코드", "type": "text"},
+]
+YIELD_OPTIONAL_PARAMS = [
+    {"key": "week", "label": "조회 주차 (예: 2025-W20)", "type": "text"},
+    {"key": "oper", "label": "공정(OPER)", "type": "text"},
+    {"key": "from_date", "label": "시작일 (week 내 필터)", "type": "date", "format": "YYYYMMDD"},
+    {"key": "end_date", "label": "종료일 (week 내 필터)", "type": "date", "format": "YYYYMMDD"},
+]
+
+# DB 테이블
+YIELD_TABLE = "schema_name.yield_table"  # TODO: 실제 테이블명
+
+# 컬럼명
+YIELD_LOT_COLUMN = "lot_cd"        # TODO: 실제 컬럼명
+YIELD_OPER_COLUMN = "oper"         # TODO: 실제 컬럼명
+YIELD_DATE_COLUMN = "test_date"    # TODO: 실제 컬럼명
+YIELD_CAT_COLUMN = "cat"           # TODO: 실제 컬럼명
+YIELD_IN_COLUMN = "in_count"       # TODO: 투입 수 컬럼명
+YIELD_OUT_COLUMN = "out_count"     # TODO: 양품 수 컬럼명
+
+# Parquet 캐싱
+YIELD_PARQUET_DIR = "data/yield"   # TODO: 실제 저장 경로
+# 파일명 패턴: {YIELD_PARQUET_DIR}/{lot_cd}/week_{YYYYWNN}.parquet
+
+# 공정 미지정 시 전체 조회 대상 → OPER_OPTIONS 참조
 
 # =============================================================================
 # 장비 경향성 분석 설정

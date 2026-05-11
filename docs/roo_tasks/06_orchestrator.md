@@ -329,3 +329,157 @@ def _parse_workflow_type(text: str) -> WorkflowType | None:
 - MAP/장비 워크플로우 구현 시: `_workflow_handlers`에 핸들러 등록 + `_resolve_next_state`에 분기 추가
 - `_parse_workflow_type()`이 None 반환 시 메뉴를 다시 표시
 - `SELECTING_WORKFLOW`가 `DECISION_STATES`이므로 사용자 입력을 기다림
+
+### 2026-05-08: SessionSnapshot 스냅샷 저장/복원 + 롤백 기능
+
+**변경 사항:**
+- `core/session.py`에 `SessionSnapshot` dataclass 추가
+- `SessionManager`에 3개 메서드 추가: `save_snapshot()`, `restore_snapshot()`, `get_completed_states()`
+- `_initialize()`에 `st.session_state.snapshots = {}`, `snapshot_base_dir` 추가
+- 기존 세션 호환: `__init__`에서 `snapshots`, `snapshot_base_dir` 키 없으면 자동 추가
+- `app.py`에 각 주요 단계 도달 시 `session.save_snapshot()` 호출 추가:
+  - `COLLECTING_PARAMS` 핸들러 진입 시
+  - `SHOWING_QUERY_RESULTS` 핸들러 진입 시
+  - `SHOWING_DATA_OVERVIEW` 도달 직후
+  - `SHOWING_FEATURES` 도달 직후
+  - `SHOWING_PREDICTIONS` 도달 직후
+
+**새로 추가된 인터페이스:**
+```python
+# core/session.py
+
+@dataclass
+class SessionSnapshot:
+    state: WorkflowState
+    workflow_type: WorkflowType
+    metadata: dict                    # deep copy (메모리)
+    context_keys: list[str]           # workflow_context에 있던 DataFrame 키 목록
+    disk_dir: Path                    # parquet 파일이 저장된 디렉토리
+    chat_history_length: int          # 채팅 잘라내기용
+    state_history: list[WorkflowState]
+
+    def load_context(self) -> dict[str, pd.DataFrame]:
+        """디스크에서 DataFrame들을 읽어 반환"""
+
+    def cleanup(self) -> None:
+        """디스크의 parquet 파일 삭제"""
+
+class SessionManager:
+    def save_snapshot(self) -> None:
+        """현재 상태의 스냅샷을 저장.
+        - metadata: deep copy (메모리)
+        - DataFrame: disk_dir/{key}.parquet로 디스크 저장
+        - 기존 스냅샷이 있으면 디스크 정리 후 덮어쓰기"""
+
+    def restore_snapshot(self, target_state: WorkflowState) -> bool:
+        """스냅샷에서 metadata(메모리), workflow_context(디스크→메모리), history 복원.
+        chat_history를 스냅샷 시점까지 잘라내고 롤백 안내 메시지 추가.
+        target 이후 스냅샷은 디스크 정리 포함 삭제. 성공 시 True 반환."""
+
+    def get_completed_states(self) -> list[WorkflowState]:
+        """스냅샷이 존재하는 상태 목록 반환 (= 롤백 가능 상태)"""
+```
+
+**디스크 저장 구조:**
+```
+/tmp/agent_snapshots_XXXXXX/          ← snapshot_base_dir (세션당 1개)
+  COLLECTING_PARAMS/                  ← 상태별 디렉토리
+    (DataFrame 없으면 빈 디렉토리)
+  SHOWING_QUERY_RESULTS/
+    query_result.parquet
+  SHOWING_DATA_OVERVIEW/
+    query_result.parquet
+    merged_data.parquet
+  SHOWING_FEATURES/
+    query_result.parquet
+    merged_data.parquet
+    preprocessed.parquet
+  SHOWING_PREDICTIONS/
+    ...all above + predictions.parquet
+```
+
+**기존 코드 수정:**
+- `core/session.py:SessionSnapshot` — `workflow_context: dict` → `context_keys: list[str]` + `disk_dir: Path`로 변경
+- `core/session.py:_initialize` — `TemporaryDirectory`로 `snapshot_base_dir` 초기화, `atexit` 핸들러 등록
+- `core/session.py:save_snapshot` — DataFrame을 parquet로 디스크 저장, 메모리에는 키 목록만 보관
+- `core/session.py:restore_snapshot` — `snapshot.load_context()`로 디스크에서 DataFrame 복원, 삭제 시 `cleanup()` 호출
+- `core/session.py:reset` — `TemporaryDirectory.cleanup()` 호출로 디스크 전체 삭제
+- 모듈 로딩 시 `_cleanup_stale_snapshots()` 실행 — 24시간 이상 된 고아 디렉토리 자동 삭제
+
+**디스크 라이프사이클 (3중 안전장치):**
+
+| 삭제 시점 | 메커니즘 | 커버하는 시나리오 |
+|-----------|----------|-----------------|
+| 사용자가 "처음부터 다시" 클릭 | `reset()` → `TemporaryDirectory.cleanup()` | 정상 초기화 |
+| 롤백 | `restore_snapshot()` → 이후 스냅샷 `cleanup()` | 부분 삭제 |
+| Streamlit 프로세스 종료 | `atexit` 핸들러 + `TemporaryDirectory` 소멸자 | 정상 종료 (Ctrl+C 등) |
+| 앱 재시작 | `_cleanup_stale_snapshots()` — 24시간 초과 고아 디렉토리 삭제 | 비정상 종료 (kill -9, 서버 다운) |
+| OS 재부팅 | `/tmp` 자동 정리 (macOS/Linux) | 최후의 안전망 |
+
+**루코드 구현 시 주의사항:**
+- `st.session_state.snapshot_tmp_handle`에 `TemporaryDirectory` 객체 참조를 유지해야 함 (GC 방지). 이 참조가 사라지면 디렉토리가 즉시 삭제됨
+- DataFrame은 메모리에 보관하지 않고 `{snapshot_base_dir}/{state_name}/{key}.parquet`에 저장
+- `restore_snapshot()`은 `load_context()`로 parquet를 읽어 메모리로 복원 — I/O 비용은 있으나 메모리 절약
+- `cleanup()`은 `shutil.rmtree()`로 상태 디렉토리 전체 삭제
+- `_SNAPSHOT_MAX_AGE_HOURS = 24` — 운영 환경에 맞게 조정 가능
+- 실제 데이터 연동 시 parquet 직렬화가 안 되는 컬럼 타입(예: object 내 복잡한 중첩 구조)이 있으면 `to_parquet()` 실패 가능 → 해당 컬럼은 전처리 단계에서 단순 타입으로 변환 필요
+
+### 2026-05-08: 수율 경향성 워크플로우 핸들러 + 워크플로우 메뉴 확장
+
+**변경 사항:**
+- `app.py` — 워크플로우 메뉴에 "수율 경향성 분석" 추가 (3번 → 수율, 4번 → 장비)
+- `app.py` — `_parse_workflow_type()` — `"3"`, `"수율"`, `"yield"`, `"트렌드"` 등 키워드 인식
+- `app.py` — `_get_required_params_for_workflow()` — `YIELD_TREND` 시 `schema.YIELD_REQUIRED_PARAMS` 반환
+- `app.py` — `_handle_collecting()` — 필수값 충족 시 `YIELD_TREND`이면 `_handle_yield_loading()` 호출
+- `app.py` — `handle_user_input()` — `YIELD_SHOWING_OVERVIEW`, `YIELD_AWAITING_REQUEST`, `YIELD_SHOWING_DETAIL` 상태 핸들링 추가
+- `app.py` — `_extract_params_with_llm()` — `week` 파라미터 추출 키 추가
+- `app.py` — `_parse_params_fallback()` — week 추출 패턴 추가 (`W20`, `20주차`, `2025-W20`)
+- `llm/prompts.py` — `build_yield_param_extraction()` 메서드 추가 (week 파싱 포함)
+- `pipeline/yield_trend.py` import 추가
+
+**새로 추가된 인터페이스:**
+```python
+# app.py — 수율 핸들러
+def _handle_yield_loading(session: SessionManager, params: dict) -> str:
+    """수율 워크플로우 진입: week 결정 → parquet 로드/DB 조회 → 전처리 → overview 표시.
+    상태 전이: YIELD_LOADING_DATA → YIELD_PREPROCESSING → YIELD_SHOWING_OVERVIEW"""
+
+def _handle_yield_request(session: SessionManager, user_input: str) -> str:
+    """사용자 요청 파싱 → 상세 뷰 표시 → 루프.
+    상태 전이: YIELD_SHOWING_DETAIL → YIELD_AWAITING_REQUEST (또는 COMPLETED)"""
+
+# llm/prompts.py
+class PromptBuilder:
+    def build_yield_param_extraction(self, user_input: str, existing_params: dict) -> str:
+        """수율 워크플로우 전용 파라미터 추출 프롬프트.
+        추출 대상: lot_cd(필수), week(선택), oper(선택), from_date(선택), end_date(선택)"""
+```
+
+**앱 핸들러 흐름:**
+```
+YIELD_LOADING_DATA:
+  resolve_weeks(params) → load_or_query() → session 저장
+  → YIELD_PREPROCESSING → filter_by_date() → preprocess_yield()
+  → YIELD_SHOWING_OVERVIEW → overview 테이블 표시
+
+YIELD_SHOWING_OVERVIEW / YIELD_AWAITING_REQUEST:
+  parse_detail_request(user_input)
+  - "종료" → COMPLETED
+  - "전체 보여줘" → 모든 공정 수율 trend 표
+  - "OP1 cat1 보여줘" → 특정 공정-cat 필터
+  → YIELD_SHOWING_DETAIL → YIELD_AWAITING_REQUEST (루프)
+```
+
+**세션 저장 키:**
+
+| 키 | 타입 | 용도 |
+|----|------|------|
+| `yield_raw` | DataFrame | 원본 수율 데이터 |
+| `yield_oper_summary` | DataFrame | 공정별 수율 집계 |
+| `yield_cat_detail` | DataFrame | 공정-cat별 불량률 집계 |
+
+**루코드 구현 시 주의사항:**
+- 워크플로우 메뉴 번호가 변경됨: 3번=수율, 4번=장비
+- `_parse_workflow_type()`의 키워드 우선순위: "트렌드"/"trend" → YIELD_TREND, "장비"/"챔버"/"센서" → EQUIP_TREND
+- `week` 파라미터는 fallback 파서에서 `W20`, `20주차`, `2025-W20` 패턴을 인식
+- conventional, MAP 워크플로우 코드는 일절 변경 없음

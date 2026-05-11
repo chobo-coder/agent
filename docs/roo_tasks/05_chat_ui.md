@@ -287,3 +287,78 @@ def main():
 - [ ] 에러 발생 시 에러 메시지 + 복구 안내 표시
 - [ ] Reset 버튼으로 전체 초기화 동작
 - [ ] `streamlit run app.py`로 전체 UI 확인
+
+---
+
+## 변경 이력
+
+### 2026-05-08: 사이드바 스테이지 클릭 → 롤백 기능
+
+**변경 사항:**
+- `SIDEBAR_STAGES` 상수 추가: 사용자에게 의미 있는 6개 스테이지만 사이드바에 표시
+- `render_sidebar()` 전면 변경:
+  - 완료된 스테이지(스냅샷 존재 + 현재보다 이전): `st.button("↩ 라벨")` 클릭 시 롤백 + `st.rerun()`
+  - 현재 스테이지: `**▶ 라벨**` 텍스트
+  - 미래 스테이지: `○ 라벨` 텍스트
+  - 진행률 바를 `SIDEBAR_STAGES` 기준으로 계산
+- 기존 `list(WorkflowState)` 전체 나열 → `SIDEBAR_STAGES`만 표시로 변경
+
+**새로 추가된 인터페이스:**
+```python
+# ui/chat.py
+SIDEBAR_STAGES = [
+    WorkflowState.COLLECTING_PARAMS,
+    WorkflowState.SHOWING_QUERY_RESULTS,
+    WorkflowState.SHOWING_DATA_OVERVIEW,
+    WorkflowState.SHOWING_FEATURES,
+    WorkflowState.SHOWING_PREDICTIONS,
+    WorkflowState.COMPLETED,
+]
+```
+
+**기존 코드 수정:**
+- `ui/chat.py:render_sidebar` — 전체 상태 리스트 대신 `SIDEBAR_STAGES` 사용, 완료 스테이지에 `st.button()` 추가
+
+**루코드 구현 시 주의사항:**
+- `session.get_completed_states()`로 스냅샷이 존재하는 상태 확인
+- `session.restore_snapshot(stage)` 호출 후 반드시 `st.rerun()` 실행
+- 버튼 key는 `f"rollback_{stage.name}"` 형식으로 고유성 보장
+- MAP/장비 워크플로우 구현 시 `SIDEBAR_STAGES`에 해당 워크플로우 단계 추가 필요
+
+### 2026-05-08: 개발자 모드 + 테스트 시나리오 UI
+
+**변경 사항:**
+- `test_app.py`에 `_is_dev_mode()` 함수 추가 — `st.query_params.get("dev") == "1"`로 판별
+- 디버그 정보 + 테스트 시나리오 버튼을 `_is_dev_mode()` 조건으로 감싸서 개발자만 표시
+- 일반 사용자: `http://localhost:8506` → 워크플로우 진행 UI만 표시
+- 개발자: `http://localhost:8506/?dev=1` → 디버그 정보 + 테스트 시나리오 버튼 추가 표시
+
+**새로 추가된 인터페이스:**
+```python
+# test_app.py (향후 app.py에도 적용 가능)
+
+def _is_dev_mode() -> bool:
+    """URL 쿼리 파라미터로 개발자 모드 판별.
+    접속 URL에 ?dev=1 이 있으면 True.
+    예: http://localhost:8506/?dev=1
+    """
+    return st.query_params.get("dev") == "1"
+
+# 테스트 시나리오 정의 (dict: 라벨 → 자동 입력 텍스트)
+TEST_SCENARIOS = {
+    "1단계: 워크플로우 선택 (기존 분석)": "1",
+    "2단계: 조건 입력 (전체 파라미터)": "LOT A01 oper_001 20250101 20250331 cat2 분석해줘",
+    "3단계: S3 추가 로딩 (예)": "예, 추가 로딩해줘",
+    "3단계: S3 추가 로딩 (아니오)": "아니오, 충분합니다",
+    "4단계: 전처리 선택 (1,2,7)": "1, 2, 7",
+    "4단계: 전처리 선택 (전부)": "전부",
+    "5단계: 피처 + 임계값": "col_3, col_4로 0.7 기준으로 예측해줘",
+}
+```
+
+**루코드 구현 시 주의사항:**
+- `app.py`에도 동일한 `_is_dev_mode()` 패턴 적용 가능 — 사이드바 하단에 디버그 expander 추가
+- `TEST_SCENARIOS`의 입력 텍스트는 `_parse_params_fallback()` regex 파서와 호환되어야 함
+- 테스트 시나리오 추가/수정 시 `TEST_SCENARIOS` dict에 항목 추가
+- 개발자 모드 판별 방식을 변경하려면 (예: 사내 SSO, 환경변수 등) `_is_dev_mode()`만 수정
+- `st.query_params`는 Streamlit 1.30+ 에서 사용 가능 (현재 1.57.0 사용 중)
