@@ -362,3 +362,44 @@ TEST_SCENARIOS = {
 - 테스트 시나리오 추가/수정 시 `TEST_SCENARIOS` dict에 항목 추가
 - 개발자 모드 판별 방식을 변경하려면 (예: 사내 SSO, 환경변수 등) `_is_dev_mode()`만 수정
 - `st.query_params`는 Streamlit 1.30+ 에서 사용 가능 (현재 1.57.0 사용 중)
+
+### 2026-05-11: 동적 사이드바 스테이지 + MAP/수율 상태 라벨 추가
+
+**변경 사항:**
+- `ui/chat.py:SIDEBAR_STAGES` — 워크플로우별 동적 스테이지 표시로 변경
+  - `_get_sidebar_stages(workflow_type)` 함수로 WorkflowType에 따라 다른 스테이지 목록 반환
+  - conventional: 기존 6단계
+  - MAP: COLLECTING_PARAMS → MAP_QUERYING_LOT → MAP_SHOWING_FAIL_CONCENTRATION → MAP_SELECTING_WAFERS → MAP_SHOWING_RESULTS → MAP_SHOWING_PREV_PROCESS_RESULTS → COMPLETED
+  - YIELD: COLLECTING_PARAMS → YIELD_LOADING_DATA → YIELD_SHOWING_OVERVIEW → YIELD_AWAITING_REQUEST → COMPLETED
+- `ui/chat.py` — MAP/수율 상태별 한국어 라벨 추가:
+  - `MAP_QUERYING_LOT` → "LOT 조회"
+  - `MAP_SHOWING_FAIL_CONCENTRATION` → "Fail 몰림 확인"
+  - `MAP_SELECTING_WAFERS` → "Wafer 선택"
+  - `MAP_ANALYZING_WAFER_MAP` → "Wafer Map 분석"
+  - `MAP_SHOWING_RESULTS` → "MAP 분석 결과"
+  - `MAP_AWAITING_PREV_PROCESS_MERGE` → "전공정 Merge 선택"
+  - `MAP_ANALYZING_PREV_PROCESS` → "전공정 분석"
+  - `MAP_SHOWING_PREV_PROCESS_RESULTS` → "전공정 결과"
+  - `YIELD_LOADING_DATA` → "수율 데이터 로딩"
+  - `YIELD_PREPROCESSING` → "수율 전처리"
+  - `YIELD_SHOWING_OVERVIEW` → "수율 Overview"
+  - `YIELD_AWAITING_REQUEST` → "상세 조회 대기"
+  - `YIELD_SHOWING_DETAIL` → "상세 결과"
+- `ui/formatters.py:format_dataframe` — `app.py`에서 `st.dataframe` 전에 포맷팅 적용
+- `render_sidebar()` — 워크플로우 유형, 조회 파라미터, Y값 결정 방식 표시 추가
+
+**새로 추가된 인터페이스:**
+```python
+# ui/chat.py
+def _get_sidebar_stages(workflow_type: WorkflowType) -> list[WorkflowState]:
+    """워크플로우별 사이드바에 표시할 스테이지 목록 반환."""
+
+# ui/formatters.py
+def format_dataframe(df: pd.DataFrame) -> None:
+    """DataFrame을 Streamlit에 표시. 행 수, shape 정보 포함."""
+```
+
+**루코드 구현 시 주의사항:**
+- 장비(EQUIP_TREND) 워크플로우 구현 시 `_get_sidebar_stages()`에 장비 전용 스테이지 추가 필요
+- MAP/수율 워크플로우에서는 conventional의 스테이지(SHOWING_QUERY_RESULTS 등)가 표시되지 않음
+- 워크플로우 전환 시(reset 후 재선택) 사이드바 스테이지도 자동 갱신됨

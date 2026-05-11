@@ -291,3 +291,42 @@ def _parse_params_fallback(user_input: str) -> dict:
 - `schema.REQUIRED_PARAMS`의 key 목록과 추출 결과의 key가 일치해야 함
 - `schema.PROCESS_OPTIONS`가 비어있으면 공정은 자유 입력으로 처리
 - 날짜 파싱에서 "N월" → 해당 연도 N월 1일~말일로 변환하는 로직 포함
+
+### 2026-05-11: LLM 프롬프트 대폭 개선 + 수율 전용 프롬프트 추가
+
+**변경 사항:**
+- `llm/prompts.py:build_param_extraction` — 완전 재작성:
+  - 추출 파라미터: `lot_cd`, `oper`, `from_date`, `end_date`, `cat`
+  - 날짜 형식: YYYYMMDD (하이픈 없이 8자리)
+  - `schema.LOT_OPTIONS`, `schema.OPER_OPTIONS` 기반 few-shot 예시 동적 생성
+  - 기존 `existing_params` 머지 규칙 명시
+  - "1월부터 3월까지", "최근 3개월", "지난달" 등 한국어 날짜 표현 변환 규칙 추가
+- `llm/prompts.py:build_yield_param_extraction` — 수율 워크플로우 전용 신규:
+  - 추출 파라미터: `lot_cd`(필수), `week`(선택), `oper`(선택), `from_date`(선택), `end_date`(선택)
+  - week 형식: YYYY-WNN (예: "2025-W20")
+  - "20주차" → "2025-W20", "지난주" → null 변환 규칙
+- `llm/prompts.py:_build_combination_prompt` — selections 배열 형식으로 변경:
+  - 기존: `{"features": [...], "threshold": float}`
+  - 변경: `{"selections": [{"feature": str, "threshold": float|null, "condition": str|null}]}`
+  - 피처별 독립 조건/임계값 지정 가능
+
+**새로 추가된 인터페이스:**
+```python
+# llm/prompts.py
+class PromptBuilder:
+    def build_yield_param_extraction(self, user_input: str, existing_params: dict) -> str:
+        """수율 워크플로우 전용 파라미터 추출 프롬프트.
+        추출 결과: {"lot_cd": str, "week": str|null, "oper": str|null, "from_date": str|null, "end_date": str|null}
+        """
+```
+
+**기존 코드 수정:**
+- `llm/prompts.py:build_param_extraction` — 반환 JSON 키가 `lot_cd, oper, from_date, end_date, cat`으로 변경 (기존 product/date_from/date_to 대신)
+- `llm/prompts.py:_build_combination_prompt` — 반환 형식이 `{"selections": [...]}` 배열로 변경
+
+**루코드 구현 시 주의사항:**
+- `build_param_extraction`의 반환 키가 `schema.REQUIRED_PARAMS`의 key와 일치해야 함
+- `build_yield_param_extraction`은 `app.py`에서 `WorkflowType.YIELD_TREND`일 때만 호출됨
+- `_build_combination_prompt`의 `selections` 형식 변경에 따라 `_parse_feature_selections()`도 이 형식을 기대함
+- `schema.LOT_OPTIONS`가 빈 리스트면 프롬프트에 LOT 예시 없이 표시
+- `schema.OPER_OPTIONS`가 빈 리스트면 프롬프트에 공정 목록 없이 표시

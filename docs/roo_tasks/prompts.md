@@ -315,8 +315,13 @@ test_integration.py:
 
 - 각 프롬프트는 독립적으로 실행 가능하지만, 이전 태스크의 코드가 있어야 동작
 - **모든 데이터 참조는 `schema.py`에서 import** — 컬럼명/테이블명 하드코딩 금지
-- 조회 파라미터는 `lot_cd`, `from_date`, `end_date`, `cat`(선택)
+- conventional 조회 파라미터: `lot_cd`, `oper`, `from_date`(YYYYMMDD), `end_date`(YYYYMMDD), `cat`(선택)
+- MAP 조회 파라미터: `lot_cd`, `lot_no`, `oper`, `from_date`, `end_date`, `cat`(선택)
+- 수율 조회 파라미터: `lot_cd`(필수), `week`(선택), `oper`(선택), `from_date`(선택), `end_date`(선택)
 - Y값은 cat 지정 시 cat 기반, 미지정 시 `schema.FAILBIN` 기반
-- MAP/장비 워크플로우는 TODO 상태 — 주석 해제 + 핸들러 구현으로 활성화
+- MAP 워크플로우: 구현 완료 (mock). 실제 DB 연동은 루코드가 구현
+- 수율 워크플로우: 구현 완료 (mock). 실제 DB 연동은 루코드가 구현
+- 장비 워크플로우: TODO 상태 — 주석 해제 + 핸들러 구현으로 활성화
+- 워크플로우 메뉴: 1=기존분석, 2=MAP경향성, 3=수율경향성, 4=장비경향성
 - 사내 SDK/S3 실제 연동은 mock으로 대체한 상태이므로, 추후 별도 교체 필요
 - 테스트 실패 시 루코드에 "이 테스트 실패하는데 수정해줘: [에러 메시지]"로 후속 요청

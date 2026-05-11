@@ -483,3 +483,74 @@ YIELD_SHOWING_OVERVIEW / YIELD_AWAITING_REQUEST:
 - `_parse_workflow_type()`의 키워드 우선순위: "트렌드"/"trend" → YIELD_TREND, "장비"/"챔버"/"센서" → EQUIP_TREND
 - `week` 파라미터는 fallback 파서에서 `W20`, `20주차`, `2025-W20` 패턴을 인식
 - conventional, MAP 워크플로우 코드는 일절 변경 없음
+
+### 2026-05-11: MAP 경향성 워크플로우 핸들러 + conventional 파이프라인 확장 반영
+
+**변경 사항:**
+- `app.py` — MAP 워크플로우 핸들러 추가:
+  - `_handle_map_query(session, params)` — LOT 조회 + fail 몰림 표시 → wafer 선택 → map 분석
+  - `_handle_map_prev_process_decision(session, user_input)` — 전공정 merge 선택 → similarity 분석
+  - `handle_user_input()` — MAP_SHOWING_FAIL_CONCENTRATION, MAP_SELECTING_WAFERS, MAP_SHOWING_RESULTS, MAP_AWAITING_PREV_PROCESS_MERGE, MAP_SHOWING_PREV_PROCESS_RESULTS 상태 분기 추가
+- `app.py` — conventional 파이프라인 확장:
+  - EDA 버튼 (`st.button("📊 EDA 수행")`) + `_handle_eda()` 핸들러
+  - 전처리 미리보기 루프: `_handle_preprocess_loop()` — 도구 선택 → preview → 누적 → "완료" 시 apply
+  - Threshold Scanning: 전처리 완료 후 자동 `run_threshold_scanning()` 실행
+  - Scatter Plot: 예측 완료 시 `plot_feature_scatter()` → PNG 저장 + 표시
+- `app.py` — `_parse_params_fallback()` 확장:
+  - OPER 매칭: `schema.OPER_OPTIONS` 기반 키워드 검색
+  - 날짜 형식: YYYYMMDD (하이픈 없이) 변환
+  - LOT 코드: 영문+숫자 3글자 이상 패턴
+
+**새로 추가된 인터페이스:**
+```python
+# app.py — MAP 핸들러
+def _handle_map_query(session: SessionManager, params: dict) -> str:
+    """MAP 워크플로우 진입: LOT 조회 → fail 집계 → 몰림 표시.
+    상태 전이: MAP_QUERYING_LOT → MAP_SHOWING_FAIL_CONCENTRATION"""
+
+def _handle_map_prev_process_decision(session: SessionManager, user_input: str) -> str:
+    """전공정 merge 여부 선택. '예' → merge + similarity, '아니오' → COMPLETED."""
+
+# app.py — conventional 확장
+def _handle_eda(session: SessionManager) -> None:
+    """EDA 실행. 상태 전이 없음 (현재 상태 내 실행)."""
+
+def _handle_preprocess_loop(session: SessionManager, user_input: str) -> str:
+    """전처리 도구 미리보기 루프. '완료' 입력 시 일괄 적용."""
+
+def _apply_preprocess_plan(session: SessionManager) -> str:
+    """누적된 전처리 계획 적용 → threshold scanning → SHOWING_FEATURES 전이."""
+```
+
+**MAP 핸들러 상태 흐름:**
+```
+COLLECTING_PARAMS (필수값 충족)
+  → _handle_map_query() → MAP_QUERYING_LOT → MAP_SHOWING_FAIL_CONCENTRATION
+  → 사용자 wafer 선택 → MAP_SELECTING_WAFERS → MAP_ANALYZING_WAFER_MAP → MAP_SHOWING_RESULTS
+  → 사용자 전공정 선택 → MAP_AWAITING_PREV_PROCESS_MERGE
+    → "예" → MAP_ANALYZING_PREV_PROCESS → MAP_SHOWING_PREV_PROCESS_RESULTS → COMPLETED
+    → "아니오" → COMPLETED
+```
+
+**conventional 확장 흐름:**
+```
+SHOWING_QUERY_RESULTS
+  → [EDA 버튼] → run_eda() → 결과 표시 (상태 변화 없음)
+  → "예" (S3 추가) → 로딩 → SHOWING_DATA_OVERVIEW
+  → "아니오" → SHOWING_DATA_OVERVIEW
+
+SHOWING_DATA_OVERVIEW (전처리 루프)
+  → "1" → preview_tool() → 미리보기 표시 → 대기 (루프)
+  → "7" → preview_tool() → 미리보기 표시 → 대기 (루프)
+  → "완료" → apply_plan() → run_threshold_scanning() → SHOWING_FEATURES
+
+SHOWING_FEATURES
+  → 피처/조건/임계값 선택 → compute_prediction_metrics() → plot_feature_scatter() → COMPLETED
+```
+
+**루코드 구현 시 주의사항:**
+- MAP 핸들러에서 실제 DB 연동 시 `map_pipeline.query_lot_fail_summary()`와 `map_pipeline.query_wafer_map_detail()` 교체
+- EDA는 상태 전이 없이 SHOWING_QUERY_RESULTS 내에서 실행 — `session.metadata["eda_done"]`으로 중복 방지
+- 전처리 미리보기 루프는 `session.metadata["preprocess_plan"]`에 PreprocessPlan 객체 저장
+- Threshold Scanning 결과는 `session.set_dataframe("scanning_result", df)`로 저장 — SHOWING_FEATURES에서 `st.dataframe`으로 표시
+- Scatter Plot PNG는 `session.metadata["scatter_plot"]`에 bytes로 저장 — COMPLETED에서 `st.image()`로 표시
